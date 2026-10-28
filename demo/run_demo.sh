@@ -16,6 +16,9 @@ PY="${PYTHON:-python3}"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 PAUSE="${ASSAY_DEMO_PAUSE:-0}"
 
+# Start from a clean output dir: a stale artifact from an earlier take must never reach the
+# summary. (Booth-day footgun: a leftover scorecard would contradict the live numbers on screen.)
+rm -rf "$OUT"
 mkdir -p "$OUT"
 cd "$ROOT"
 
