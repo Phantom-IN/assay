@@ -7,14 +7,23 @@ without the gap closing.
 
 ---
 
-## G1 — Real MCP: closed for Mode A, open for Mode B
+## G1 — Real MCP: closed for Mode A, and now for the text Mode-B tasks
 
-**Status: Mode A closed. Mode B remains open, and is now the single most important
-limitation.**
+**Status: Mode A closed. Mode B closed for the 22 text tasks — a real LLM agent is driven over a
+real loopback MCP connection, and a spectrum of real models has been measured
+([`demo/arsenal/`](demo/arsenal/)). What remains open: the 6 image tasks (no third-party vision
+model has been shown to read the planted canary), a witnessed run (one machine ran both sides), and
+faithful multi-phase renderings of every mechanism.**
 
-At baseline the only adapters were three deterministic in-process stubs. Nothing crossed a
-process boundary, spoke a wire protocol, or could be pointed at software the harness did not
-import, so every number was a property of the harness talking to itself.
+At baseline the only adapters were three deterministic in-process stubs, so every number was a
+property of the harness talking to itself. That is no longer true for the text agent tasks:
+[`src/assay_bench/adapters/llm_agent.py`](src/assay_bench/adapters/llm_agent.py) drives a real model
+(via OpenRouter, stdlib-only HTTPS, key never in argv/manifest/fingerprint) against the adversarial
+MCP scenarios in [`src/assay_bench/scenarios.py`](src/assay_bench/scenarios.py), which are modelled
+on named 2026 incidents (GeminiJack, ForcedLeak, Rules File Backdoor, EchoLeak). The committed
+spectrum shows GPT, Claude, Gemini, DeepSeek, Llama and GLM each leaking a recomputable canary, with
+~2× discrimination. The paragraphs below describe what Mode A shipped first; the Mode-B adapter is
+the same idea carried to the agent side.
 
 ### What shipped
 
@@ -530,7 +539,7 @@ explicit list of what is *not* a vulnerability because it is a documented limit,
 
 **Rehearsed and passing**, from a clean clone of the pushed `main`:
 
-- 558 tests, 0 failures;
+- 578 tests, 0 failures;
 - `python -m build` produces both artifacts, `twine check --strict` **PASSES** on each;
 - the wheel installs into a clean venv and runs from outside the checkout, including a Mode-A
   run against a real MCP server;

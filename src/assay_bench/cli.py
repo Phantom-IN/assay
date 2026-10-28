@@ -87,6 +87,19 @@ def _build_target(args):
             f"reference MCP server ({posture}) shipped by this repository, started on loopback "
             f"and driven over real HTTP; a real MCP server, not third-party software")
 
+    if args.target == "llm":
+        from .adapters.llm_agent import LLMAgentAdapter
+        if not getattr(args, "model", None):
+            raise UsageError("--target llm requires --model (e.g. --model openai/gpt-6.1-terra)")
+        adapter = LLMAgentAdapter(
+            args.model, max_steps=getattr(args, "max_steps", 6),
+            effort=getattr(args, "effort", None) or None,
+            request_timeout=max(20.0, min(args.timeout, 90.0)))
+        return adapter, (lambda: None), (
+            f"real LLM agent ({args.model}) driven over loopback MCP; canary tasks decided "
+            "by the frozen oracle from tool-boundary egress; image tasks are unsupported "
+            "(text model)")
+
     return build_builtin(args.target), (lambda: None), ""
 
 
@@ -102,7 +115,8 @@ def cmd_run(args) -> int:
                        run_secret=args.run_secret, task_ids=args.task or None,
                        timeout_s=args.timeout, command=command,
                        target_note=args.note or default_note,
-                       run_id=args.run_id, trials_out=args.trials_out)
+                       run_id=args.run_id, trials_out=args.trials_out,
+                       model_snapshot=(args.model if getattr(args, "target", None) == "llm" else None))
     finally:
         stop_target()
     if args.trials_out:
@@ -131,6 +145,11 @@ def cmd_run(args) -> int:
               f"{headline} real_target={caps.is_real_target}")
     else:
         _print(manifest)
+    cost = getattr(adapter, "cost_usd", None)
+    if cost is not None and getattr(adapter, "calls", 0):
+        print(f"model usage: {adapter.calls} API calls, "
+              f"{adapter.prompt_tokens}+{adapter.completion_tokens} tokens, "
+              f"~${cost:.4f}", file=sys.stderr)
     return EXIT_OK
 
 
@@ -493,6 +512,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "that the transport-level tasks M17 and M18 are HTTP properties and "
                         "are reported unsupported over stdio, never as resisted.")
     r.add_argument("--target-token", help="bearer token presented to --target-url")
+    r.add_argument("--model", help="for --target llm: the OpenRouter model id, e.g. "
+                                   "openai/gpt-6.1-terra")
+    r.add_argument("--max-steps", type=int, default=6,
+                   help="for --target llm: max agent tool-call turns per episode")
+    r.add_argument("--effort", help="for --target llm: reasoning effort if supported "
+                                    "(low|medium|high)")
     r.add_argument("--track", default="agent", choices=["agent", "server"])
     r.add_argument("--trials", type=int, default=25)
     r.add_argument("--timeout", type=float, default=10.0)
