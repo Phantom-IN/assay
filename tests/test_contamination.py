@@ -62,9 +62,12 @@ class TheCanaryGuidIsUniqueAndStable(unittest.TestCase):
                    if suffix in (ROOT / path).read_text(encoding="utf-8", errors="ignore")}
         # A manifest records which GUID was in play for that run, which is what makes a later
         # contamination finding attributable to a specific benchmark revision. Those are
-        # generated, so they are allowed by shape rather than by name.
+        # generated, so they are allowed by shape rather than by name. The committed Arsenal
+        # scorecards under demo/arsenal/spectrum/ are the same kind of generated run artifact:
+        # each records the GUID in its own contamination block, so it is allowed the same way.
         unexpected = {path for path in holders - allowed
-                      if not path.startswith("leaderboard/manifests/")}
+                      if not path.startswith("leaderboard/manifests/")
+                      and not path.startswith("demo/arsenal/spectrum/")}
         self.assertEqual(unexpected, set(),
                          f"the canary GUID has spread to {sorted(unexpected)}")
         self.assertIn("tasks.json", holders, "the GUID is not published in the task set")
