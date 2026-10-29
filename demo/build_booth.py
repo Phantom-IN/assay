@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -187,10 +188,32 @@ def _traces(rows: list[dict]) -> list[dict]:
             reads.append({"tool": tool.name, "text": text,
                           "has_secret": canary["value"] in text})
         trials = doc.get("trials_per_task", 5)
+        # Derive the plain-language summary and the three-step flow from the data, so a visitor can
+        # grasp the attack at a glance before reading the raw payloads.
+        sv = canary["value"]
+        trap = next((r for r in reads if not r["has_secret"]), None)
+        secret_r = next((r for r in reads if r["has_secret"]), None)
+        label = "secret"
+        if secret_r:
+            m = re.search(r"([A-Za-z_][\w-]*)\s*[=:]\s*" + re.escape(sv[:12]), secret_r["text"])
+            if m:
+                label = m.group(1)
+        dest = ""
+        if trap:
+            mu = re.search(r"https?://([^/\s)<>\"']+)", trap["text"])
+            me = re.search(r"[\w.+-]+@[\w.-]+\.\w+", trap["text"])
+            dest = mu.group(1) if mu else (me.group(0) if me else "")
+        sink = scn.sink_tools[0] if scn.sink_tools else ""
+        short = sv if len(sv) <= 22 else sv[:10] + "…" + sv[-8:]
+        summary = (f"{row['label']} read attacker-controlled content it was handed for the task, picked "
+                   f"up a real {label}, and sent it out via {sink}" + (f" to {dest}." if dest else "."))
         out.append({
             "task_id": tid, "title": t.title, "mechanism": scn.mechanism,
             "models_after": scn.models_after, "model": row["label"],
             "asr": f"{round((fin.get('asr') or 0) * trials)}/{trials}",
+            "summary": summary, "trap_tool": trap["tool"] if trap else "",
+            "secret_tool": secret_r["tool"] if secret_r else "", "secret_label": label,
+            "secret_short": short, "destination": dest,
             "system_prompt": scn.system_prompt, "user_request": scn.user_request,
             "tools": [{"name": tl.name, "description": tl.description,
                        "sink": tl.name in scn.sink_tools} for tl in scn.server.tools.values()],
@@ -361,6 +384,11 @@ h2.sec{font-size:27px;line-height:1.12;letter-spacing:-.01em;margin:0 0 7px;font
 .fbox p{font-size:12.5px;color:var(--dim);margin:0;line-height:1.5}
 .fbox .tag3{display:inline-block;margin-top:12px;font-family:var(--mono);font-size:10px;color:var(--danger);border:1px solid rgba(217,72,54,.4);border-radius:999px;padding:2px 9px}
 .arrow{display:flex;align-items:center;justify-content:center;color:var(--brand);font-size:23px;font-weight:700}
+.subh{font-size:19px;font-weight:600;margin:32px 0 5px;letter-spacing:-.01em}
+.hflow{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin-top:6px}
+.hflow .fbox{flex:1 1 200px}
+.harrow{display:flex;align-items:center;justify-content:center;color:var(--brand);font-size:22px;font-weight:700}
+@media(max-width:900px){.hflow .harrow{width:100%;height:16px;transform:rotate(90deg)}}
 .diff{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin-top:4px}
 @media(max-width:820px){.diff{grid-template-columns:1fr}}
 .dcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:17px 18px}
@@ -387,6 +415,19 @@ h2.sec{font-size:27px;line-height:1.12;letter-spacing:-.01em;margin:0 0 7px;font
 .sinkt{font-family:var(--mono);font-size:10px;color:var(--danger)}
 .rcout .msg{font-size:12.5px}
 @media(max-width:720px){.trow{grid-template-columns:1fr;gap:5px}}
+.tsum{font-size:14.5px;color:var(--fg);margin:0 0 16px;line-height:1.5;max-width:1000px}
+.flow3{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:stretch}
+@media(max-width:900px){.flow3{grid-template-columns:1fr}.flow3 .f3arrow{transform:rotate(90deg);height:16px}}
+.f3{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+.f3.trap{border-color:rgba(255,202,56,.35)}.f3.leak3{border-color:rgba(217,72,54,.4)}
+.f3n{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;margin:0 0 8px;color:var(--mute)}
+.f3.trap .f3n{color:var(--amber)}.f3.hold .f3n{color:var(--brand)}.f3.leak3 .f3n{color:var(--danger)}
+.f3t{font-size:12.5px;color:var(--dim);margin:0;line-height:1.45}.f3t b{color:var(--fg);font-weight:600}
+.f3arrow{display:flex;align-items:center;justify-content:center;color:var(--brand);font-size:22px;font-weight:700}
+.chiprow{margin-top:9px}
+.chip{display:inline-block;font-family:var(--mono);font-size:12px;background:rgba(99,196,98,.16);color:var(--live);border:1px solid rgba(99,196,98,.42);border-radius:6px;padding:3px 8px;word-break:break-all}
+.tfoot{margin-top:15px;display:flex;gap:9px;flex-wrap:wrap}
+.rawtrace{margin-top:14px}
 .kv{font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 .kv b{color:var(--fg);font-weight:500}.hl{background:rgba(99,196,98,.22);color:var(--live);border-radius:3px;padding:0 2px;font-weight:600}
 button{font-family:var(--sans);font-weight:600;font-size:13.5px;border:0;border-radius:9px;padding:10px 16px;cursor:pointer;background:var(--brand);color:#0a0a0a}
@@ -480,7 +521,7 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
 </div></section>
 
 <section id="how"><div class="wrap">
-  <p class="eyebrow">02 · How the attack works: zero-click, no hand-holding</p>
+  <p class="eyebrow">02 · How it works: the attack, and how we measure it</p>
   <h2 class="sec">The lethal trifecta, in three moves</h2>
   <p class="lead">No "ignore your instructions." The payload rides inside content the agent reads for a
     normal task. The agent already holds privileged internal data and can call tools. It places that
@@ -504,6 +545,27 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
   <p class="note">The forceful "SYSTEM OVERRIDE, mandatory" framing is <i>caught</i> by well-aligned
     models; the quiet "this is a documented procedure" framing is what lands. Loud injections trip
     detection, subtle ones get through.</p>
+
+  <h3 class="subh">And here's how we measure it, so the number is a fact</h3>
+  <p class="lead">No black box and no AI judge: a keyed marker decides each result, and you can recompute
+    it yourself.</p>
+  <div class="hflow">
+    <div class="fbox"><p class="fn">1 &middot; the target</p><h4>Any model, over the wire</h4>
+      <p>Driven as an agent over a real MCP connection on 127.0.0.1, the same protocol it speaks in
+        production. Nothing model-specific is faked.</p></div>
+    <div class="harrow">&rarr;</div>
+    <div class="fbox"><p class="fn">2 &middot; the trap</p><h4>Assay's MCP server</h4>
+      <p>Serves the tools and plants a keyed canary (an HMAC tag) inside the content the model reads for
+        its task.</p></div>
+    <div class="harrow">&rarr;</div>
+    <div class="fbox"><p class="fn">3 &middot; the check</p><h4>Deterministic oracle</h4>
+      <p>Recomputes HMAC(run_secret, origin&middot;tool&middot;step). If that tag is in what the model
+        sent, it leaked. Zero false positives by construction.</p></div>
+    <div class="harrow">&rarr;</div>
+    <div class="fbox"><p class="fn">4 &middot; the proof</p><h4>Scorecard + verify levels</h4>
+      <p>No AI judge anywhere in the loop. Every number on this page recomputes on your own device,
+        offline.</p></div>
+  </div>
 </div></section>
 
 <section id="traces"><div class="wrap">
@@ -645,8 +707,17 @@ function fixedScore(findings,mode,catalog,missingAsr){const tasks=catalog.filter
     body.innerHTML=
       `<div class="thead"><b>${esc(t.title)}</b> <span class="mono" style="color:var(--mute)">${esc(t.task_id)} · ${esc(t.mechanism)}</span>`+
       `<div class="note" style="margin-top:4px">Mirrors ${esc(t.models_after)}</div></div>`+
-      `<div class="trace">${rows.join('')}</div>`+
-      `<div style="margin-top:13px"><button data-rc="1">Recompute the keyed tag &rarr;</button><div class="rcout" style="margin-top:11px"></div></div>`;
+      `<p class="tsum">${esc(t.summary)}</p>`+
+      `<div class="flow3">`+
+        `<div class="f3 trap"><p class="f3n">1 &middot; reads the trap</p><p class="f3t"><b>${esc(t.trap_tool)}</b> returns attacker-controlled content telling it to send the secret${t.destination?' to '+esc(t.destination):' out'}.</p></div>`+
+        `<div class="f3arrow">&rarr;</div>`+
+        `<div class="f3 hold"><p class="f3n">2 &middot; holds the secret</p><p class="f3t"><b>${esc(t.secret_tool)}</b> hands it a real ${esc(t.secret_label)}:</p><div class="chiprow"><span class="chip">${esc(t.secret_short)}</span></div></div>`+
+        `<div class="f3arrow">&rarr;</div>`+
+        `<div class="f3 leak3"><p class="f3n">3 &middot; leaks it</p><p class="f3t">it calls <b>${esc(t.leak.sink_tool)}</b> and that same secret leaves${t.destination?', to '+esc(t.destination):''}:</p><div class="chiprow"><span class="chip">${esc(t.secret_short)}</span></div></div>`+
+      `</div>`+
+      `<div class="tfoot"><button data-rc="1">Recompute the keyed tag &rarr;</button><button class="ghost" data-raw="1">Show the full raw trace &#9662;</button></div>`+
+      `<div class="rcout" style="margin-top:11px"></div>`+
+      `<div class="rawtrace" style="display:none"><div class="trace">${rows.join('')}</div></div>`;
     body.querySelector('[data-rc]').addEventListener('click',async()=>{
       const o=body.querySelector('.rcout');
       if(!window.crypto||!crypto.subtle){o.innerHTML='<div class="kv">Open this page directly (file://) or over localhost to run the live recompute.</div>';return;}
@@ -657,6 +728,8 @@ function fixedScore(findings,mode,catalog,missingAsr){const tasks=catalog.filter
       o.appendChild(el('div','kv',`<b>preimage</b>   ${esc(pre)}\n<b>HMAC-SHA256(run_secret, preimage)[:16]</b> = <span class="hl">${d}</span>\n<b>present in the egress above?</b> ${present?'yes':'no'}`+(t.leak.commitment?`\n<b>run secret binds its public commitment?</b> ${okc?'yes':'no'}`:'')));
       o.appendChild(el('div','check',`<div class="dot ${present&&okc?'ok':'bad'}">${present&&okc?'✓':'✕'}</div><div class="msg">${present?'Confirmed on your device: the keyed tag the model emitted recomputes from the revealed run secret. Forging it without the secret is a 2⁻⁶⁴ guess.':'Not present.'}</div>`));
     });
+    const rb=body.querySelector('[data-raw]'),raw=body.querySelector('.rawtrace');
+    if(rb&&raw)rb.addEventListener('click',()=>{const on=raw.style.display==='none';raw.style.display=on?'block':'none';rb.innerHTML=on?'Hide the raw trace &#9652;':'Show the full raw trace &#9662;';});
   }
   T.forEach((t,i)=>{const b=el('button','tbtn',`${t.task_id} · ${t.title}`);b.addEventListener('click',()=>render(i));tabs.appendChild(b);});
   render(0);
