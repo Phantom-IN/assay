@@ -267,6 +267,17 @@ class CommittedSpectrum(unittest.TestCase):
 
     def test_the_committed_report_regenerates_byte_for_byte(self):
         require_source_checkout(self)
+        # The report re-checks the scorecards' recorded commit with `git ls-tree`, and says so
+        # differently when that commit is not in the clone. A shallow checkout (CI's default
+        # depth of 1) has .git but not the commit, so the committed wording cannot be expected
+        # there. The `evidence` CI job fetches full history and enforces this check.
+        if not SPECTRUM:
+            self.skipTest("spectrum scorecards are not present")
+        recorded = json.loads(SPECTRUM[0].read_text())["provenance"]["code_commit"]
+        present = subprocess.run(["git", "cat-file", "-e", f"{recorded}^{{commit}}"], cwd=ROOT,
+                                 capture_output=True).returncode == 0
+        if not present:
+            self.skipTest(f"recorded commit {recorded[:7]} is not in this clone (shallow?)")
         r = subprocess.run([sys.executable, str(ROOT / "research" /
                                                  "generate_statistical_analysis.py"), "--check"],
                            cwd=ROOT, capture_output=True, text=True)

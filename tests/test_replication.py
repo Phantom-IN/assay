@@ -287,6 +287,12 @@ class AgainstABundle(unittest.TestCase):
 
     def test_valid_submission_against_its_bundle(self):
         bdir = self._make_bundle()
+        # Outside a git checkout (an unpacked sdist) the runner records repository_commit null,
+        # and the validator rightly refuses to confirm a commit the bundle never recorded. No
+        # submission can be valid against such a bundle, so there is nothing to test here.
+        exp = json.loads((bdir / "experiment.json").read_text())
+        if exp["experiment"]["repository_commit"] is None:
+            self.skipTest("bundle recorded no repository commit (not a git checkout)")
         self._sign(bdir, ed25519.generate_keypair()[0])
         doc = self._submission(bdir)
         result = validate_submission(doc, bundle_dir=bdir)
