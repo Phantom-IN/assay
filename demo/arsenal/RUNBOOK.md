@@ -5,9 +5,9 @@ what to say. Co-presenter: Vaibhav Vanage — share this with them before the se
 
 ## The one-line
 
-> A benchmark you can't lie in: we made real models from six labs — OpenAI's included — leak
-> privileged data through MCP tool calls, decided it with a deterministic keyed oracle instead of an
-> LLM judge, and every number on the screen recomputes on your own phone.
+> Deterministic, recomputable, nothing hidden: we made real models from six labs — OpenAI's included —
+> leak privileged data through MCP tool calls, decided each leak with a keyed oracle instead of an LLM
+> judge, and every number on the screen recomputes on your own phone.
 
 ## What's on the laptop
 
@@ -32,7 +32,7 @@ what to say. Co-presenter: Vaibhav Vanage — share this with them before the se
    confirmed the tag is in it. Forging that means forging a 64-bit HMAC — 2⁻⁶⁴."*
 3. **Forge a passing scorecard.** Hand them the laptop. Let them raise the score, rewrite the leak,
    or drop a finding, then hit "Run the verifier." It rejects each by name — the real verifier
-   messages. This is the "you can't lie in it" moment, and it's the thing a breaker crowd engages
+   messages. This is the "you can't fake a pass" moment, and it's the thing a breaker crowd engages
    with. (The forge seed is a real measured scorecard, not a toy.)
 4. **Judge vs oracle.** Same egress, graded by an LLM judge and by the oracle. The judge false-alarms
    on a legitimate API call and the oracle never does — the argument for why this is deterministic,

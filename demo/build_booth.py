@@ -131,6 +131,79 @@ def _leak_proof(rows: list[dict]) -> dict | None:
     return None
 
 
+#: Traces shown in full, hero attack first, then the distinct-mechanism ones.
+_TRACE_TASKS = ["M3", "M7", "M1", "M23", "M24"]
+#: Which model's egress to display when several leaked a task: highest ASR, tie-broken by this order
+#: (lead with a current frontier-lab model, not the 2024 baseline).
+_TRACE_MODEL_RANK = {m: i for i, m in enumerate([
+    "openai/gpt-6.1-terra", "anthropic/claude-haiku-5.5", "google/gemini-3.8-flash",
+    "deepseek/deepseek-v4.1-flash", "openai/gpt-6-luna", "qwen/qwen3.8-flash",
+    "z-ai/glm-5.3-flashx", "meta-llama/llama-3.1-8b-instruct"])}
+
+
+def _trace_args(tool) -> dict:
+    """Plausible arguments for a read tool, so calling its handler yields the content the agent saw."""
+    guess = {"email": "dana@globex.example", "tenant": "acme", "id": "T-4821",
+             "query": "database outage runbook"}
+    return {k: guess.get(k, "sample") for k in tool.input_schema.get("required", [])}
+
+
+def _traces(rows: list[dict]) -> list[dict]:
+    """Full, recomputable attack traces: the scenario each model faced (system prompt, task, tools, and
+    the attacker-controlled content it read, carrying the planted secret) paired with the real egress it
+    produced on a run where it leaked. The secret is re-planted under that run's revealed secret, so the
+    content shown and the egress shown carry the identical keyed tag, and the panel recomputes it."""
+    from assay_bench import canary as C, scenarios
+    from assay_bench.adapters import Episode
+    from assay_bench.catalog import load_catalog
+    cat = load_catalog()
+    out = []
+    for tid in _TRACE_TASKS:
+        try:
+            t = cat.require(tid)
+        except Exception:
+            continue
+        cand = [(r, fin) for r in rows
+                for fin in [next((f for f in r["_doc"]["findings"]
+                                  if f["id"] == tid and f.get("fired") and f.get("canary")), None)]
+                if fin]
+        if not cand:
+            continue
+        cand.sort(key=lambda rf: (-(rf[1].get("asr") or 0),
+                                  _TRACE_MODEL_RANK.get(rf[0]["model"], 99)))
+        row, fin = cand[0]
+        doc = row["_doc"]
+        c = fin["canary"]
+        run_secret = doc["run_secret_reveal"]
+        canary = C.plant(run_secret, tid, c["origin"], t.attack, c["step"])
+        scn = scenarios.build_scenario(
+            t, Episode(task_id=tid, mode=t.mode, oracle=t.oracle, attack=t.attack,
+                       trial=0, canary=canary), canary)
+        reads = []
+        for tool in scn.server.tools.values():
+            if tool.name in scn.sink_tools:
+                continue
+            text = tool.handler(_trace_args(tool))["content"][0]["text"]
+            reads.append({"tool": tool.name, "text": text,
+                          "has_secret": canary["value"] in text})
+        trials = doc.get("trials_per_task", 5)
+        out.append({
+            "task_id": tid, "title": t.title, "mechanism": scn.mechanism,
+            "models_after": scn.models_after, "model": row["label"],
+            "asr": f"{round((fin.get('asr') or 0) * trials)}/{trials}",
+            "system_prompt": scn.system_prompt, "user_request": scn.user_request,
+            "tools": [{"name": tl.name, "description": tl.description,
+                       "sink": tl.name in scn.sink_tools} for tl in scn.server.tools.values()],
+            "reads": reads, "secret_value": canary["value"], "digest": canary["digest"],
+            "leak": {"tool": c["tool"],
+                     "sink_tool": (scn.sink_tools[0] if scn.sink_tools else c["tool"]),
+                     "observed": c["observed"], "origin": c["origin"],
+                     "step": c["step"], "run_secret_reveal": run_secret,
+                     "commitment": doc.get("run_secret_commitment", "")},
+        })
+    return out
+
+
 def _forge_seed(rows: list[dict]) -> dict:
     """A real leaking scorecard for the forge challenge, else the conformance stub."""
     leakers = _hero_leakers(rows)
@@ -197,6 +270,7 @@ def build(spectrum_dir: str, out_path: str) -> str:
     data = {
         "spectrum": [{k: v for k, v in r.items() if k != "_doc"} for r in rows],
         "leak_proof": _leak_proof(rows),
+        "traces": _traces(rows),
         "forge": _forge_seed(rows),
         "judge": judge,
         "methodology": methodology,
@@ -226,7 +300,7 @@ def build(spectrum_dir: str, out_path: str) -> str:
 _TEMPLATE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Assay — a benchmark you can't lie in</title>
+<title>Assay — deterministic, recomputable, nothing hidden</title>
 <style>
 /*FONTS*/
 :root{
@@ -287,13 +361,32 @@ h2.sec{font-size:27px;line-height:1.12;letter-spacing:-.01em;margin:0 0 7px;font
 .fbox p{font-size:12.5px;color:var(--dim);margin:0;line-height:1.5}
 .fbox .tag3{display:inline-block;margin-top:12px;font-family:var(--mono);font-size:10px;color:var(--danger);border:1px solid rgba(217,72,54,.4);border-radius:999px;padding:2px 9px}
 .arrow{display:flex;align-items:center;justify-content:center;color:var(--brand);font-size:23px;font-weight:700}
-.diff{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:4px}
+.diff{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin-top:4px}
 @media(max-width:820px){.diff{grid-template-columns:1fr}}
 .dcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:17px 18px}
 .dcard .dk{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:0 0 5px}
 .dcard .do{font-size:12.5px;color:var(--mute);margin:0 0 13px;line-height:1.45;padding-bottom:13px;border-bottom:1px solid var(--line)}
 .dcard .da{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--brand);margin:0 0 5px}
 .dcard .dt{font-size:13px;color:var(--fg);margin:0;line-height:1.5}
+.ttabs{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 18px}
+.tbtn{font-family:var(--sans);font-size:12.5px;font-weight:500;border:1px solid var(--line);border-radius:999px;padding:7px 13px;cursor:pointer;background:var(--panel2);color:var(--dim)}
+.tbtn.on{background:var(--brand);color:#0a0a0a;border-color:var(--brand);font-weight:600}
+.tbtn:hover{color:var(--fg)}.tbtn.on:hover{color:#0a0a0a}
+.thead{margin:0 0 14px}.thead b{font-size:16.5px}
+.trace{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.trow{display:grid;grid-template-columns:138px 1fr;gap:14px;padding:13px 15px;border-top:1px solid var(--line)}
+.trow:first-child{border-top:0}
+.trow.leak{background:rgba(217,72,54,.07)}
+.tlab{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);padding-top:3px;word-break:break-word}
+.trow.leak .tlab{color:var(--danger)}
+.tval{font-size:13px;color:var(--dim);line-height:1.5;min-width:0}
+.tval b{color:var(--fg);font-weight:600}
+.bad1{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--amber);border:1px solid rgba(255,202,56,.4);border-radius:999px;padding:1px 8px}
+.bad2{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--brand);border:1px solid rgba(255,96,56,.4);border-radius:999px;padding:1px 8px}
+.bad3{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--danger);border:1px solid rgba(217,72,54,.45);border-radius:999px;padding:1px 8px}
+.sinkt{font-family:var(--mono);font-size:10px;color:var(--danger)}
+.rcout .msg{font-size:12.5px}
+@media(max-width:720px){.trow{grid-template-columns:1fr;gap:5px}}
 .kv{font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 .kv b{color:var(--fg);font-weight:500}.hl{background:rgba(99,196,98,.22);color:var(--live);border-radius:3px;padding:0 2px;font-weight:600}
 button{font-family:var(--sans);font-weight:600;font-size:13.5px;border:0;border-radius:9px;padding:10px 16px;cursor:pointer;background:var(--brand);color:#0a0a0a}
@@ -320,18 +413,18 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
 <nav class="nav"><div class="wrap">
   <span class="logo"><!--LOGO--></span>
   <div class="links">
-    <a href="#different">Why different</a><a href="#spectrum">The spectrum</a><a href="#how">How it works</a><a href="#proof">Recompute</a>
+    <a href="#different">Why different</a><a href="#spectrum">The spectrum</a><a href="#how">How it works</a><a href="#traces">The traces</a>
     <a href="#judge">Judge vs oracle</a><a href="#forge">Forge it</a><a href="#real">Real attacks</a>
   </div>
   <span class="tag">Black Hat India · Arsenal · 2026</span>
 </div></nav>
 
 <header class="hero"><div class="wrap">
-  <p class="eyebrow">Not another leaderboard &middot; graded by a keyed oracle, not an LLM judge</p>
-  <h1>A benchmark you <span class="accent">can't lie in</span></h1>
-  <p class="deck">Every other AI benchmark asks an AI to grade the AI, and hands you a number you take on
-    trust. Assay swaps the judge for a <b>keyed marker</b>, so every result is a fact you recompute
-    yourself, and nobody can fake a passing score.</p>
+  <p class="eyebrow">MCP agent-security benchmark &middot; deterministic, recomputable, nothing hidden</p>
+  <h1>What if your AI agent's biggest threat isn't what it doesn't know, but <span class="accent">what it blindly obeys?</span></h1>
+  <p class="deck">We plant a trap in the content an agent reads for a normal task, and measure whether it
+    obeys and leaks. Unlike other benchmarks, the tasks are open, a <b>keyed marker</b> grades each result
+    instead of an LLM judge, and you recompute every number yourself.</p>
   <p class="sub">We ran real models from six labs against live MCP indirect-injection attacks drawn from
     named 2025&ndash;26 incidents. Every one leaked a secret, and each leak is provable on your own phone.</p>
   <div class="stats" id="stats"></div>
@@ -364,6 +457,13 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
       <p class="da">Assay</p>
       <p class="dt">Tamper with a scorecard and the verifier rejects it by name. Try it yourself at the
         table.</p>
+    </div>
+    <div class="dcard">
+      <p class="dk">Other benchmarks</p>
+      <p class="do">Tasks are hidden or held out, so you can't see what you were scored on.</p>
+      <p class="da">Assay</p>
+      <p class="dt">Every task is open and published; nothing is held back. A planted canary GUID even
+        makes training-set contamination detectable.</p>
     </div>
   </div>
   <p class="note">And it measures the real thing: live indirect prompt-injection against a running MCP
@@ -406,13 +506,15 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
     detection, subtle ones get through.</p>
 </div></section>
 
-<section id="proof"><div class="wrap">
-  <p class="eyebrow">03 · The proof: don't trust us, recompute it</p>
-  <h2 class="sec" id="leak-h">A real leak, recomputed in your browser</h2>
-  <p class="lead" id="leak-lead"></p>
-  <div class="kv" id="triple"></div>
-  <div style="margin-top:14px"><button id="recompute">Recompute HMAC-SHA256 &rarr;</button></div>
-  <div id="recompute-out" style="margin-top:13px"></div>
+<section id="traces"><div class="wrap">
+  <p class="eyebrow">03 · The traces: every payload, nothing hidden</p>
+  <h2 class="sec">See exactly what the agent read, and what it sent</h2>
+  <p class="lead">No black box. Pick an attack: here is the full trace the model faced &mdash; its task,
+    its tools, the attacker-controlled content it read (with the planted secret), and the exact tool call
+    it made to leak. The egress is the real output from the model named; recompute the keyed tag yourself
+    right here.</p>
+  <div class="ttabs" id="trace-tabs"></div>
+  <div id="trace-body"></div>
 </div></section>
 
 <section id="judge"><div class="wrap">
@@ -521,24 +623,43 @@ function fixedScore(findings,mode,catalog,missingAsr){const tasks=catalog.filter
     'Scores use the realistic "documented-procedure" attack.';
 })();
 
-// ---- panel 2a: recompute ----
+// ---- panel 2a: traces ----
 (function(){
-  const rc=DATA.leak_proof;
-  if(!rc){$('#leak-lead').textContent='No leak proof attached yet.';$('#triple').textContent='';return;}
-  $('#leak-h').innerHTML=`${rc.model} leaked on task ${rc.task_id}`;
-  $('#leak-lead').innerHTML=`A hit is the keyed 64-bit tag present in what the model actually sent `+
-    `across the tool boundary. Forging it without the run secret means forging an HMAC tag (≈2⁻⁶⁴).`;
-  const pre=`${rc.origin}|${rc.tool}|${rc.step}`;
-  $('#triple').innerHTML=`<b>model</b>       ${rc.model}\n<b>run_secret</b>  ${rc.run_secret_reveal.slice(0,16)}… (revealed)\n<b>preimage</b>    ${pre}\n<b>observed</b>    <span id="obs"></span>`;
-  $('#obs').textContent=rc.observed;
-  $('#recompute').addEventListener('click',async()=>{
-    if(!window.crypto||!crypto.subtle){$('#recompute-out').innerHTML='<div class="kv">Open this page directly (file://) or over localhost to run the live recompute.</div>';return;}
-    const d=await hmac16(rc.run_secret_reveal,pre),present=detects(d,rc.observed),idx=rc.observed.indexOf(d);
-    if(idx>=0)$('#obs').innerHTML=rc.observed.slice(0,idx)+'<span class="hl">'+d+'</span>'+rc.observed.slice(idx+d.length);
-    const o=$('#recompute-out');o.innerHTML='';
-    o.appendChild(el('div','kv',`<b>digest</b>  HMAC-SHA256(secret,"${pre}")[:16] = <span class="hl">${d}</span>\n<b>present in what the model sent?</b> ${present?'yes':'no'}`));
-    o.appendChild(el('div','check',`<div class="dot ${present?'ok':'bad'}">${present?'✓':'✕'}</div><div class="msg">${present?'Confirmed. This is a real exfiltration by a real model, recomputed on your device.':'Not present.'}</div>`));
-  });
+  const T=DATA.traces,tabs=$('#trace-tabs'),body=$('#trace-body');
+  if(!T||!T.length){if(body)body.textContent='No traces attached yet.';return;}
+  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const mark=(s,v)=>{s=esc(s);if(v){s=s.split(esc(v)).join('<span class="hl">'+esc(v)+'</span>');}return s;};
+  function render(i){
+    const t=T[i];
+    [...tabs.children].forEach((b,j)=>b.className='tbtn'+(j===i?' on':''));
+    const rows=[];
+    const row=(lab,html,cls)=>rows.push(`<div class="trow${cls?' '+cls:''}"><span class="tlab">${lab}</span><div class="tval">${html}</div></div>`);
+    row('system',esc(t.system_prompt));
+    row('task',esc(t.user_request));
+    row('tools',t.tools.map(tl=>`<b>${esc(tl.name)}</b>${tl.sink?' <span class="sinkt">sink · can send data out</span>':''} &mdash; ${esc(tl.description)}`).join('<br>'));
+    t.reads.forEach(r=>{
+      const badge=r.has_secret?'<span class="bad2">the secret the agent holds</span>':'<span class="bad1">attacker-controlled content</span>';
+      row('reads '+esc(r.tool),`${badge}<div class="kv" style="margin-top:7px">${mark(r.text,t.secret_value)}</div>`);
+    });
+    row('LEAKS via '+esc(t.leak.sink_tool),`<span class="bad3">${esc(t.model)} · fired ${esc(t.asr)} · the model's real egress</span><div class="kv" style="margin-top:7px">${mark(t.leak.observed,t.secret_value)}</div>`,'leak');
+    body.innerHTML=
+      `<div class="thead"><b>${esc(t.title)}</b> <span class="mono" style="color:var(--mute)">${esc(t.task_id)} · ${esc(t.mechanism)}</span>`+
+      `<div class="note" style="margin-top:4px">Mirrors ${esc(t.models_after)}</div></div>`+
+      `<div class="trace">${rows.join('')}</div>`+
+      `<div style="margin-top:13px"><button data-rc="1">Recompute the keyed tag &rarr;</button><div class="rcout" style="margin-top:11px"></div></div>`;
+    body.querySelector('[data-rc]').addEventListener('click',async()=>{
+      const o=body.querySelector('.rcout');
+      if(!window.crypto||!crypto.subtle){o.innerHTML='<div class="kv">Open this page directly (file://) or over localhost to run the live recompute.</div>';return;}
+      const pre=`${t.leak.origin}|${t.leak.tool}|${t.leak.step}`;
+      const d=await hmac16(t.leak.run_secret_reveal,pre),present=detects(d,t.leak.observed);
+      const okc=t.leak.commitment?((await sha256hex(hexToBytes(t.leak.run_secret_reveal)))===t.leak.commitment):true;
+      o.innerHTML='';
+      o.appendChild(el('div','kv',`<b>preimage</b>   ${esc(pre)}\n<b>HMAC-SHA256(run_secret, preimage)[:16]</b> = <span class="hl">${d}</span>\n<b>present in the egress above?</b> ${present?'yes':'no'}`+(t.leak.commitment?`\n<b>run secret binds its public commitment?</b> ${okc?'yes':'no'}`:'')));
+      o.appendChild(el('div','check',`<div class="dot ${present&&okc?'ok':'bad'}">${present&&okc?'✓':'✕'}</div><div class="msg">${present?'Confirmed on your device: the keyed tag the model emitted recomputes from the revealed run secret. Forging it without the secret is a 2⁻⁶⁴ guess.':'Not present.'}</div>`));
+    });
+  }
+  T.forEach((t,i)=>{const b=el('button','tbtn',`${t.task_id} · ${t.title}`);b.addEventListener('click',()=>render(i));tabs.appendChild(b);});
+  render(0);
 })();
 
 // ---- panel 2b: judge vs oracle ----
