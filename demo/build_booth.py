@@ -73,6 +73,13 @@ def _spectrum_row(path: Path) -> dict | None:
         d = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    trials_doc = None
+    tp = path.with_name(path.stem + "_trials.json")
+    if tp.exists():
+        try:
+            trials_doc = json.loads(tp.read_text(encoding="utf-8"))
+        except Exception:
+            trials_doc = None
     model = (d.get("target") or {}).get("model_snapshot") or path.stem
     v = d.get("validity", {}); asmt = v.get("assessment", {})
     # Count SECRET exfiltrations (canary oracle) separately from behavioral failures (an unsafe
@@ -90,7 +97,7 @@ def _spectrum_row(path: Path) -> dict | None:
         "unsafe_ids": unsafe, "unsafe_count": len(unsafe),
         "reported": asmt.get("reported_tasks"), "trials": d.get("trials_per_task"),
         "target_is_real": (d.get("provenance") or {}).get("target_is_real"),
-        "_doc": d,
+        "_doc": d, "_trials": trials_doc,
     }
 
 
@@ -207,6 +214,51 @@ def _traces(rows: list[dict]) -> list[dict]:
         short = sv if len(sv) <= 22 else sv[:10] + "…" + sv[-8:]
         summary = (f"{row['label']} read attacker-controlled content it was handed for the task, picked "
                    f"up a real {label}, and sent it out via {sink}" + (f" to {dest}." if dest else "."))
+        # The real recorded tool-call chain, parsed into a clean per-call list (one line each) so the
+        # booth shows the whole chain without a wall of text; the verbatim excerpt stays in the raw view.
+        trials_doc = row.get("_trials")
+        chain, trial_no, trial_state, trial_retries = "", None, "", 0
+        if trials_doc:
+            tt = (trials_doc.get("tasks") or {}).get(tid) or []
+            ft = next((x for x in tt if x.get("fired")), None)
+            if ft:
+                chain = ft.get("egress_excerpt", "")
+                trial_no, trial_state = ft.get("trial"), ft.get("state", "")
+                trial_retries = ft.get("retries", 0)
+        tool_names = list(scn.server.tools.keys())
+        calls = []
+        if chain and tool_names:
+            pat = re.compile(r"(?:^|\n)(" + "|".join(re.escape(n) for n in tool_names) + r") \{")
+            marks = [(mm.start(1), mm.group(1)) for mm in pat.finditer(chain)]
+            seen_sink = False
+            for i, (pos, name) in enumerate(marks):
+                endp = marks[i + 1][0] if i + 1 < len(marks) else len(chain)
+                argstr = chain[pos + len(name):endp].strip()
+                is_leak = (name in scn.sink_tools) and not seen_sink
+                if name in scn.sink_tools:
+                    seen_sink = True
+                if is_leak:
+                    hint = f"to {dest}, carrying the {label}" if dest else f"carrying the {label}"
+                else:
+                    try:
+                        obj = json.loads(argstr)
+                    except Exception:
+                        obj = None
+                    if obj:
+                        parts = []
+                        for k, vv in obj.items():
+                            s = str(vv).replace("\n", " ").strip()
+                            parts.append(f"{k}: " + (s[:46] + "…" if len(s) > 46 else s))
+                        hint = ", ".join(parts)
+                    elif obj == {}:
+                        hint = "no arguments"
+                    else:
+                        s = argstr.replace("\n", " ").strip()
+                        hint = (s[:60] + "…") if len(s) > 60 else (s or "no arguments")
+                calls.append({"n": i + 1, "tool": name, "hint": hint, "leak": is_leak})
+        prov = doc.get("provenance") or {}
+        variant = (((prov.get("target_fingerprint_material") or {}).get("material") or {})
+                   .get("variant") or "")
         out.append({
             "task_id": tid, "title": t.title, "mechanism": scn.mechanism,
             "models_after": scn.models_after, "model": row["label"],
@@ -214,6 +266,10 @@ def _traces(rows: list[dict]) -> list[dict]:
             "summary": summary, "trap_tool": trap["tool"] if trap else "",
             "secret_tool": secret_r["tool"] if secret_r else "", "secret_label": label,
             "secret_short": short, "destination": dest,
+            "calls": calls, "chain": chain, "trial_no": trial_no, "trial_state": trial_state,
+            "trial_retries": trial_retries, "variant": variant, "asr_ci": fin.get("asr_ci") or [],
+            "run_id": prov.get("run_id", ""), "code_commit": prov.get("code_commit", ""),
+            "started_at": prov.get("started_at", ""),
             "system_prompt": scn.system_prompt, "user_request": scn.user_request,
             "tools": [{"name": tl.name, "description": tl.description,
                        "sink": tl.name in scn.sink_tools} for tl in scn.server.tools.values()],
@@ -291,7 +347,7 @@ def build(spectrum_dir: str, out_path: str) -> str:
 
     methodology = _methodology()
     data = {
-        "spectrum": [{k: v for k, v in r.items() if k != "_doc"} for r in rows],
+        "spectrum": [{k: v for k, v in r.items() if k not in ("_doc", "_trials")} for r in rows],
         "leak_proof": _leak_proof(rows),
         "traces": _traces(rows),
         "forge": _forge_seed(rows),
@@ -428,6 +484,17 @@ h2.sec{font-size:27px;line-height:1.12;letter-spacing:-.01em;margin:0 0 7px;font
 .chip{display:inline-block;font-family:var(--mono);font-size:12px;background:rgba(99,196,98,.16);color:var(--live);border:1px solid rgba(99,196,98,.42);border-radius:6px;padding:3px 8px;word-break:break-all}
 .tfoot{margin-top:15px;display:flex;gap:9px;flex-wrap:wrap}
 .rawtrace{margin-top:14px}
+.chainh{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--brand);margin:16px 0 7px}
+.calls{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.crw{display:grid;grid-template-columns:24px 176px 1fr;gap:10px;padding:9px 13px;border-top:1px solid var(--line);align-items:baseline}
+.crw:first-child{border-top:0}.crw.lk{background:rgba(217,72,54,.08)}
+.crw .cn2{font-family:var(--mono);color:var(--mute);font-size:11px}
+.crw .ct{font-family:var(--mono);font-weight:600;color:var(--fg);font-size:12.5px;word-break:break-all}
+.crw .ch2{color:var(--dim);font-size:12.5px;min-width:0;word-break:break-word}
+.crw.lk .ch2{color:var(--danger)}
+.lktag{font-family:var(--mono);font-size:9.5px;color:var(--danger);border:1px solid rgba(217,72,54,.45);border-radius:999px;padding:1px 6px;margin-left:4px;white-space:nowrap}
+.rfacts{font-family:var(--mono);font-size:11px;color:var(--mute);margin:11px 0 0;line-height:1.5}
+@media(max-width:720px){.crw{grid-template-columns:22px 1fr}.crw .ch2{grid-column:1/-1}}
 .kv{font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 .kv b{color:var(--fg);font-weight:500}.hl{background:rgba(99,196,98,.22);color:var(--live);border-radius:3px;padding:0 2px;font-weight:600}
 button{font-family:var(--sans);font-weight:600;font-size:13.5px;border:0;border-radius:9px;padding:10px 16px;cursor:pointer;background:var(--brand);color:#0a0a0a}
@@ -704,6 +771,8 @@ function fixedScore(findings,mode,catalog,missingAsr){const tasks=catalog.filter
       row('reads '+esc(r.tool),`${badge}<div class="kv" style="margin-top:7px">${mark(r.text,t.secret_value)}</div>`);
     });
     row('LEAKS via '+esc(t.leak.sink_tool),`<span class="bad3">${esc(t.model)} · fired ${esc(t.asr)} · the model's real egress</span><div class="kv" style="margin-top:7px">${mark(t.leak.observed,t.secret_value)}</div>`,'leak');
+    if(t.chain)row('recorded calls',`<div class="kv">${mark(t.chain,t.secret_value)}</div>`);
+    if(t.run_id)row('run &amp; provenance',`${esc((t.variant==='plausible'?'documented-procedure':t.variant)||'')} variant &middot; run ${esc(t.run_id)} &middot; code ${esc(t.code_commit)}${t.started_at?' &middot; recorded '+esc(t.started_at):''}`);
     body.innerHTML=
       `<div class="thead"><b>${esc(t.title)}</b> <span class="mono" style="color:var(--mute)">${esc(t.task_id)} · ${esc(t.mechanism)}</span>`+
       `<div class="note" style="margin-top:4px">Mirrors ${esc(t.models_after)}</div></div>`+
@@ -715,6 +784,8 @@ function fixedScore(findings,mode,catalog,missingAsr){const tasks=catalog.filter
         `<div class="f3arrow">&rarr;</div>`+
         `<div class="f3 leak3"><p class="f3n">3 &middot; leaks it</p><p class="f3t">it calls <b>${esc(t.leak.sink_tool)}</b> and that same secret leaves${t.destination?', to '+esc(t.destination):''}:</p><div class="chiprow"><span class="chip">${esc(t.secret_short)}</span></div></div>`+
       `</div>`+
+      (t.calls&&t.calls.length?`<p class="chainh">The model's actual tool calls${t.trial_no!=null?', recorded trial '+(t.trial_no+1):''}${t.trial_state?' &middot; '+esc(t.trial_state):''}</p><div class="calls">`+t.calls.map(cc=>`<div class="crw${cc.leak?' lk':''}"><span class="cn2">${cc.n}</span><span class="ct">${esc(cc.tool)}</span><span class="ch2">${cc.leak?'&rarr; '+esc(cc.hint)+' <span class="lktag">LEAK</span>':esc(cc.hint)}</span></div>`).join('')+`</div>`:'')+
+      (t.asr_ci&&t.asr_ci.length===2?`<p class="rfacts">fired ${esc(t.asr)} &middot; 95% CI ${Math.round(t.asr_ci[0]*100)}&ndash;${Math.round(t.asr_ci[1]*100)}% &middot; ${esc((t.variant==='plausible'?'documented-procedure':t.variant)||'documented-procedure')} variant${t.run_id?' &middot; run '+esc(t.run_id.slice(0,8)):''}</p>`:'')+
       `<div class="tfoot"><button data-rc="1">Recompute the keyed tag &rarr;</button><button class="ghost" data-raw="1">Show the full raw trace &#9662;</button></div>`+
       `<div class="rcout" style="margin-top:11px"></div>`+
       `<div class="rawtrace" style="display:none"><div class="trace">${rows.join('')}</div></div>`;
