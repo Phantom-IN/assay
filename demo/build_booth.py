@@ -253,6 +253,8 @@ body{margin:0;padding:0}
 h1{font-size:46px;line-height:1.05;letter-spacing:-.02em;margin:0 0 15px;font-weight:600}
 h1 .accent{color:var(--brand)}
 .sub{color:var(--dim);font-size:16px;margin:0;max-width:950px;line-height:1.55}
+.deck{font-size:18.5px;line-height:1.46;margin:0 0 15px;max-width:910px;font-weight:500;color:var(--fg)}
+.deck b{color:var(--brand);font-weight:600}
 .stats{display:flex;flex-wrap:wrap;gap:13px;margin-top:30px}
 .stat{flex:1 1 160px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:17px 18px}
 .stat .n{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1.05;color:var(--fg)}
@@ -285,6 +287,13 @@ h2.sec{font-size:27px;line-height:1.12;letter-spacing:-.01em;margin:0 0 7px;font
 .fbox p{font-size:12.5px;color:var(--dim);margin:0;line-height:1.5}
 .fbox .tag3{display:inline-block;margin-top:12px;font-family:var(--mono);font-size:10px;color:var(--danger);border:1px solid rgba(217,72,54,.4);border-radius:999px;padding:2px 9px}
 .arrow{display:flex;align-items:center;justify-content:center;color:var(--brand);font-size:23px;font-weight:700}
+.diff{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:4px}
+@media(max-width:820px){.diff{grid-template-columns:1fr}}
+.dcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:17px 18px}
+.dcard .dk{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:0 0 5px}
+.dcard .do{font-size:12.5px;color:var(--mute);margin:0 0 13px;line-height:1.45;padding-bottom:13px;border-bottom:1px solid var(--line)}
+.dcard .da{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--brand);margin:0 0 5px}
+.dcard .dt{font-size:13px;color:var(--fg);margin:0;line-height:1.5}
 .kv{font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 .kv b{color:var(--fg);font-weight:500}.hl{background:rgba(99,196,98,.22);color:var(--live);border-radius:3px;padding:0 2px;font-weight:600}
 button{font-family:var(--sans);font-weight:600;font-size:13.5px;border:0;border-radius:9px;padding:10px 16px;cursor:pointer;background:var(--brand);color:#0a0a0a}
@@ -311,21 +320,56 @@ th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:upp
 <nav class="nav"><div class="wrap">
   <span class="logo"><!--LOGO--></span>
   <div class="links">
-    <a href="#spectrum">The spectrum</a><a href="#how">How it works</a><a href="#proof">Recompute</a>
+    <a href="#different">Why different</a><a href="#spectrum">The spectrum</a><a href="#how">How it works</a><a href="#proof">Recompute</a>
     <a href="#judge">Judge vs oracle</a><a href="#forge">Forge it</a><a href="#real">Real attacks</a>
   </div>
   <span class="tag">Black Hat India · Arsenal · 2026</span>
 </div></nav>
 
 <header class="hero"><div class="wrap">
-  <p class="eyebrow">MCP agent-security benchmark · deterministic · recomputable</p>
+  <p class="eyebrow">Not another leaderboard &middot; graded by a keyed oracle, not an LLM judge</p>
   <h1>A benchmark you <span class="accent">can't lie in</span></h1>
-  <p class="sub">We ran real models from six labs against MCP indirect-injection attacks drawn from
-    named 2025&ndash;26 incidents and decided every result with a deterministic keyed oracle, not an
-    LLM judge. Recompute any number yourself, offline. Then try to forge a passing scorecard and watch
-    it get caught.</p>
+  <p class="deck">Every other AI benchmark asks an AI to grade the AI, and hands you a number you take on
+    trust. Assay swaps the judge for a <b>keyed marker</b>, so every result is a fact you recompute
+    yourself, and nobody can fake a passing score.</p>
+  <p class="sub">We ran real models from six labs against live MCP indirect-injection attacks drawn from
+    named 2025&ndash;26 incidents. Every one leaked a secret, and each leak is provable on your own phone.</p>
   <div class="stats" id="stats"></div>
 </div></header>
+
+<section id="different"><div class="wrap">
+  <p class="eyebrow">Why this isn't another leaderboard</p>
+  <h2 class="sec">What Assay does that other benchmarks don't</h2>
+  <p class="lead">Most AI benchmarks ask an AI to grade the AI, then publish a number you take on trust.
+    Assay is built so you never have to, which is the whole point of bringing it to a room full of people
+    paid to find the lie.</p>
+  <div class="diff">
+    <div class="dcard">
+      <p class="dk">Other benchmarks</p>
+      <p class="do">An LLM judge, or a human, decides whether the model leaked.</p>
+      <p class="da">Assay</p>
+      <p class="dt">A keyed HMAC marker planted in each attack decides it. A hit is a fact, with zero
+        false positives by construction. No AI grading AI.</p>
+    </div>
+    <div class="dcard">
+      <p class="dk">Other benchmarks</p>
+      <p class="do">You take the published score on trust; you can't re-derive it.</p>
+      <p class="da">Assay</p>
+      <p class="dt">Every result recomputes offline, on your own phone, in seconds. Don't trust us,
+        check it.</p>
+    </div>
+    <div class="dcard">
+      <p class="dk">Other benchmarks</p>
+      <p class="do">A passing score can be quietly backfilled or hand-edited.</p>
+      <p class="da">Assay</p>
+      <p class="dt">Tamper with a scorecard and the verifier rejects it by name. Try it yourself at the
+        table.</p>
+    </div>
+  </div>
+  <p class="note">And it measures the real thing: live indirect prompt-injection against a running MCP
+    server, mapped to named 2025&ndash;26 incidents (EchoLeak, ForcedLeak, the Rules File Backdoor), not
+    a static quiz. Every current model we ran leaked.</p>
+</div></section>
 
 <section id="spectrum"><div class="wrap">
   <p class="eyebrow">01 · The spectrum: who leaks, and where</p>
